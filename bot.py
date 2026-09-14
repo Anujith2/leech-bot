@@ -41,9 +41,9 @@ def load_data():
         "premium_users": {},
         "premium_codes": {},
         "verify_settings": {
-            "1": {"status": True, "shortener": "", "api": "", "tutorial": "", "time": 24},
-            "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": 24},
-            "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": 24},
+            "1": {"status": True, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
+            "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
+            "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
         }
     }
 
@@ -60,9 +60,9 @@ db = load_data()
 PREMIUM_USERS = db.get("premium_users", {})
 PREMIUM_CODES = db.get("premium_codes", {})
 VERIFY_SETTINGS = db.get("verify_settings", {
-    "1": {"status": True, "shortener": "", "api": "", "tutorial": "", "time": 24},
-    "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": 24},
-    "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": 24},
+    "1": {"status": True, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
+    "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
+    "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
 })
 
 ADMIN_STATES = {}
@@ -118,7 +118,7 @@ async def start_handler(client: Client, message: Message):
         [InlineKeyboardButton("👤 Admin Contact", url=f"https://t.me/{ADMIN_USERNAME}")],
         [InlineKeyboardButton("📢 Leech Group Join Now", url=FORCE_SUB_LINK)]
     ])
-    await message.reply_text("🤖 **I am Leech Bot!** Ready to help you download files.", reply_markup=keyboard)
+    await message.reply_text("🤖 **I am Leech Bot!** Ready to help you download files and videos.", reply_markup=keyboard)
 
 @app.on_message(filters.command("plans") & filters.private)
 async def plans_handler(client: Client, message: Message):
@@ -167,9 +167,9 @@ async def customize_handler(client: Client, message: Message):
         return
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏰ FIRST VERIFICATION", callback_data="custom_verify_1")],
-        [InlineKeyboardButton("⏰ SECOND VERIFICATION", callback_data="custom_verify_2")],
-        [InlineKeyboardButton("⏰ THIRD VERIFICATION", callback_data="custom_verify_3")]
+        [InlineKeyboardButton("⏰ FIRST TOKEN VERIFICATION", callback_data="custom_verify_1")],
+        [InlineKeyboardButton("⏰ SECOND TOKEN VERIFICATION", callback_data="custom_verify_2")],
+        [InlineKeyboardButton("⏰ THIRD TOKEN VERIFICATION", callback_data="custom_verify_3")]
     ])
     await message.reply_text("<b>TOKEN VERIFICATION SETTINGS:</b>", reply_markup=keyboard)
 
@@ -186,19 +186,19 @@ async def custom_callback_handler(client: Client, callback_query: CallbackQuery)
         status_icon = "✅" if v_data["status"] else "❌"
         
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 SET SHORTENER WEBSITE & API", callback_data=f"set_short_{v_num}")],
-            [InlineKeyboardButton("🍿 SET TUTORIAL LINK", callback_data=f"set_tutor_{v_num}")],
-            [InlineKeyboardButton(f"⏳ SET TIME ({v_data['time']}h)", callback_data=f"set_time_{v_num}")],
-            [InlineKeyboardButton(f"🔒 STATUS - {status_icon}", callback_data=f"toggle_v_{v_num}")],
+            [InlineKeyboardButton("🔗 FIRST VERIFY SHORTENER", callback_data=f"set_short_{v_num}")],
+            [InlineKeyboardButton("🍿 FIRST VERIFY TUTORIAL", callback_data=f"set_tutor_{v_num}")],
+            [InlineKeyboardButton("⏳ FIRST VERIFY TIME", callback_data=f"set_time_{v_num}")],
+            [InlineKeyboardButton(f"🔒 FIRST VERIFY - {status_icon}", callback_data=f"toggle_v_{v_num}")],
             [InlineKeyboardButton("« BACK", callback_data="custom_main")]
         ])
-        await callback_query.message.edit_text(f"⏰ **TOKEN VERIFICATION {v_num}:**", reply_markup=keyboard)
+        await callback_query.message.edit_text(f"⏰ **FIRST TOKEN VERIFICATION:**", reply_markup=keyboard)
         
     elif data == "custom_main" or data == "custom_back":
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏰ FIRST VERIFICATION", callback_data="custom_verify_1")],
-            [InlineKeyboardButton("⏰ SECOND VERIFICATION", callback_data="custom_verify_2")],
-            [InlineKeyboardButton("⏰ THIRD VERIFICATION", callback_data="custom_verify_3")]
+            [InlineKeyboardButton("⏰ FIRST TOKEN VERIFICATION", callback_data="custom_verify_1")],
+            [InlineKeyboardButton("⏰ SECOND TOKEN VERIFICATION", callback_data="custom_verify_2")],
+            [InlineKeyboardButton("⏰ THIRD TOKEN VERIFICATION", callback_data="custom_verify_3")]
         ])
         await callback_query.message.edit_text("<b>TOKEN VERIFICATION SETTINGS:</b>", reply_markup=keyboard)
         
@@ -206,13 +206,26 @@ async def custom_callback_handler(client: Client, callback_query: CallbackQuery)
         v_num = data.split("_")[-1]
         ADMIN_STATES[ADMIN_ID] = {"action": "waiting_shortener", "v_num": v_num}
         await callback_query.message.reply_text(
-            f"📥 **Instructions:**\n\n"
-            f"1. Send your Shortener Website link (e.g., `exe.io`)\n"
-            f"2. Send your API Key\n\n"
-            f"Send both together in a single message separated by a space (Example: `exe.io your_api_key_here`)."
+            "SEND ME A SHORTLINK URL...\n\nFORMAT :\nhttps://vjlink.online - ❌\nvjlink.online - ✅\n\n/cancel - CANCEL THIS PROCESS."
         )
         await callback_query.answer()
         
+    elif data.startswith("set_tutor_"):
+        v_num = data.split("_")[-1]
+        ADMIN_STATES[ADMIN_ID] = {"action": "waiting_tutorial", "v_num": v_num}
+        await callback_query.message.reply_text(
+            "SEND ME A TUTORIAL LINK...\n\n/cancel - CANCEL THIS PROCESS."
+        )
+        await callback_query.answer()
+
+    elif data.startswith("set_time_"):
+        v_num = data.split("_")[-1]
+        ADMIN_STATES[ADMIN_ID] = {"action": "waiting_time", "v_num": v_num}
+        await callback_query.message.reply_text(
+            "SEND ME A TIME IN LIKE THIS - 1h or 15m\n\n/cancel - CANCEL THIS PROCESS."
+        )
+        await callback_query.answer()
+
     elif data.startswith("toggle_v_"):
         v_num = data.split("_")[-1]
         VERIFY_SETTINGS[v_num]["status"] = not VERIFY_SETTINGS[v_num]["status"]
@@ -221,34 +234,60 @@ async def custom_callback_handler(client: Client, callback_query: CallbackQuery)
         v_data = VERIFY_SETTINGS[v_num]
         status_icon = "✅" if v_data["status"] else "❌"
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 SET SHORTENER WEBSITE & API", callback_data=f"set_short_{v_num}")],
-            [InlineKeyboardButton("🍿 SET TUTORIAL LINK", callback_data=f"set_tutor_{v_num}")],
-            [InlineKeyboardButton(f"⏳ SET TIME ({v_data['time']}h)", callback_data=f"set_time_{v_num}")],
-            [InlineKeyboardButton(f"🔒 STATUS - {status_icon}", callback_data=f"toggle_v_{v_num}")],
+            [InlineKeyboardButton("🔗 FIRST VERIFY SHORTENER", callback_data=f"set_short_{v_num}")],
+            [InlineKeyboardButton("🍿 FIRST VERIFY TUTORIAL", callback_data=f"set_tutor_{v_num}")],
+            [InlineKeyboardButton("⏳ FIRST VERIFY TIME", callback_data=f"set_time_{v_num}")],
+            [InlineKeyboardButton(f"🔒 FIRST VERIFY - {status_icon}", callback_data=f"toggle_v_{v_num}")],
             [InlineKeyboardButton("« BACK", callback_data="custom_main")]
         ])
-        await callback_query.message.edit_text(f"⏰ **TOKEN VERIFICATION {v_num}:**", reply_markup=keyboard)
+        await callback_query.message.edit_text(f"⏰ **FIRST TOKEN VERIFICATION:**", reply_markup=keyboard)
 
 @app.on_message(filters.private & filters.user(ADMIN_ID))
 async def admin_text_input_handler(client: Client, message: Message):
+    if message.text == "/cancel":
+        if ADMIN_ID in ADMIN_STATES:
+            del ADMIN_STATES[ADMIN_ID]
+            await message.reply_text("❌ Process Cancelled.")
+        return
+
     if ADMIN_ID in ADMIN_STATES:
         state = ADMIN_STATES[ADMIN_ID]
+        v_num = state["v_num"]
+        
         if state["action"] == "waiting_shortener":
-            text = message.text.strip().split()
-            if len(text) < 2:
-                await message.reply_text("❌ Please provide both the website link and API key correctly separated by a space.")
-                return
+            shortener_site = message.text.strip()
+            ADMIN_STATES[ADMIN_ID] = {"action": "waiting_api", "v_num": v_num, "shortener": shortener_site}
+            await message.reply_text("SEND ME SHORTLINK API...")
+            return
             
-            v_num = state["v_num"]
-            shortener_site = text[0]
-            api_key = text[1]
+        elif state["action"] == "waiting_api":
+            api_key = message.text.strip()
+            shortener_site = state["shortener"]
             
             VERIFY_SETTINGS[v_num]["shortener"] = shortener_site
             VERIFY_SETTINGS[v_num]["api"] = api_key
             save_data()
             
             del ADMIN_STATES[ADMIN_ID]
-            await message.reply_text(f"✅ **Success!**\n\nWebsite: `{shortener_site}`\nAPI Key: `{api_key}` has been saved successfully!")
+            await message.reply_text("SUCCESSFULLY SET SHORTLINK ✅")
+            return
+
+        elif state["action"] == "waiting_tutorial":
+            tutor_link = message.text.strip()
+            VERIFY_SETTINGS[v_num]["tutorial"] = tutor_link
+            save_data()
+            
+            del ADMIN_STATES[ADMIN_ID]
+            await message.reply_text("SUCCESSFULLY SET TUTORIAL LINK ✅")
+            return
+
+        elif state["action"] == "waiting_time":
+            time_val = message.text.strip()
+            VERIFY_SETTINGS[v_num]["time"] = time_val
+            save_data()
+            
+            del ADMIN_STATES[ADMIN_ID]
+            await message.reply_text(f"SUCCESSFULLY SET VERIFY TIME - {time_val} ✅")
             return
 
 @app.on_message((filters.command("leech") | filters.command("v")) & filters.group)
@@ -271,17 +310,36 @@ async def restricted_group_handler(client: Client, message: Message):
         msg = await message.reply_text("⏳ Processing your leech request...")
         
         try:
+            file_path = None
             if "drive.google.com" in url:
-                file_path = gdown.download(url, "downloaded_file", quiet=False, fuzzy=True)
-                if file_path and os.path.exists(file_path):
-                    await msg.edit_text("📤 Uploading to Telegram...")
-                    await client.send_document(chat_id=message.chat.id, document=file_path)
-                    os.remove(file_path)
-                    await msg.delete()
-                else:
-                    await msg.edit_text("❌ Failed to download from Google Drive.")
+                file_path = gdown.download(url, output="downloaded_file", quiet=False, resume=True)
             else:
-                await msg.edit_text("⏳ Link processing...")
+                # Direct video file / web link download support using aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            file_path = "downloaded_video.mp4"
+                            with open(file_path, "wb") as f:
+                                while True:
+                                    chunk = await resp.content.read(1024)
+                                    if not chunk:
+                                        break
+                                    f.write(chunk)
+                        else:
+                            await msg.edit_text("❌ Failed to download from the given link.")
+                            return
+
+            if file_path and os.path.exists(file_path):
+                await msg.edit_text("📤 Uploading to Telegram...")
+                # Send as video if it's a video file or document
+                if file_path.endswith((".mp4", ".mkv", ".avi", ".mov")):
+                    await client.send_video(chat_id=message.chat.id, video=file_path)
+                else:
+                    await client.send_document(chat_id=message.chat.id, document=file_path)
+                os.remove(file_path)
+                await msg.delete()
+            else:
+                await msg.edit_text("❌ Failed to process the file or video.")
         except Exception as e:
             await msg.edit_text(f"❌ Error: {str(e)}")
 
