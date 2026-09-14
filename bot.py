@@ -1,3 +1,365 @@
+import os
+import time
+import logging
+import asyncio
+import aiohttp
+import subprocess
+from pyrogram import Client, filters, idle
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+import yt_dlp
+from aiohttp import web
+
+# Logging Setup
+logging.basicConfig(level=logging.INFO)
+
+API_ID = int(os.environ.get("API_ID", "0"))
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+
+# Channel IDs
+DATABASE_CHANNEL_ID = int(os.environ.get("DATABASE_CHANNEL_ID", "-1004396122384"))
+LOG_CHANNEL_ID = int(os.environ.get("LOG_CHANNEL_ID", "-1004441596603"))
+ALLOWED_GROUP_ID = int(os.environ.get("ALLOWED_GROUP_ID", "0"))
+
+ADMIN_ID = 1727225499
+
+app = Client("LeechBot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+USER_THUMBNAILS = {}
+WAITING_FOR_THUMB = set()
+USER_YTDL_LINKS = {}
+USER_FILE_MODES = {}
+
+ACTIVE_TASKS = {}
+USER_TASK_LIMIT = 2
+CANCEL_REQUESTS = set()
+
+async def web_handler(request):
+    return web.Response(text="Bot is Live! 🚀")
+
+async def start_web_server():
+    web_app = web.Application()
+    web_app.add_routes([web.get("/", web_handler)])
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"Web server started on port {port}")
+
+def human_bytes(size):
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while size >= 1024 and i < len(units) - 1:
+        size /= 1024
+        i += 1
+    return f"{size:.2f} {units[i]}"
+
+def get_video_info(file_path):
+    duration = 0
+    width = 0
+    height = 0
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "format=duration:stream=width,height",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        lines = result.stdout.strip().split("\n")
+        if len(lines) >= 3:
+            width = int(lines[0]) if lines[0].isdigit() else 0
+            height = int(lines[1]) if lines[1].isdigit() else 0
+            duration = int(float(lines[2])) if lines[2] else 0
+    except Exception as e:
+        logging.error(f"Error getting video info: {e}")
+    return duration, width, height
+
+def generate_thumbnail(video_path, user_id):
+    os.makedirs("thumbnails", exist_ok=True)
+    thumb_path = f"thumbnails/auto_{user_id}.jpg"
+    try:
+        cmd = [
+            "ffmpeg", "-ss", "00:00:05", "-i", video_path,
+            "-vframes", "1", "-q:v", "2", thumb_path, "-y"
+        ]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+            return thumb_path
+    except Exception as e:
+        logging.error(f"Error generating thumbnail: {e}")
+    return None
+
+def get_progress_bar(percentage):
+    completed = int(percentage / 10)
+    remaining = 10 - completed
+    return "█" * completed + "░" * remaining
+
+async def download_thumbnail_from_source(client, thumb_source, user_id):
+    os.makedirs("thumbnails", exist_ok=True)
+    custom_thumb_path = f"thumbnails/custom_{user_id}.jpg"
+    try:
+        if "t.me/" in thumb_source:
+            parts = thumb_source.strip("/").split("/")
+            msg_id = int(parts[-1])
+            channel_username = parts[-2]
+            target_msg = await client.get_messages(channel_username, msg_id)
+            if target_msg and target_msg.media:
+                downloaded_thumb = await client.download_media(target_msg, file_name=custom_thumb_path)
+                if downloaded_thumb and os.path.exists(downloaded_thumb):
+                    return downloaded_thumb
+        else:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(thumb_source) as resp:
+                    if resp.status == 200:
+                        with open(custom_thumb_path, "wb") as f:
+                            f.write(await resp.read())
+                        if os.path.exists(custom_thumb_path) and os.path.getsize(custom_thumb_path) > 0:
+                            return custom_thumb_path
+    except Exception as e:
+        logging.error(f"Failed to fetch custom thumbnail from -t: {e}")
+    return None
+
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    user = message.from_user
+    user_id = user.id if user else 0
+    user_name = user.first_name if user else "Unknown"
+    username = f"@{user.username}" if user and user.username else "No Username"
+
+    if user and not user.is_bot:
+        log_msg = (
+            f"👤 <b>New User Started Bot!</b>\n\n"
+            f"<b>Name:</b> {user_name}\n"
+            f"<b>User ID:</b> <code>{user_id}</code>\n"
+            f"<b>Username:</b> {username}"
+        )
+        try:
+            await client.send_message(chat_id=LOG_CHANNEL_ID, text=log_msg)
+        except Exception as e:
+            logging.error(f"Failed to send start log to LOG_CHANNEL: {e}")
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 Admin Contact", url="https://t.me/anujith1238")]
+    ])
+    await message.reply_text(
+        "🤖 **I am Leech Bot!**\n"
+        "Ready to help you download and manage files.",
+        reply_markup=keyboard
+    )
+
+@app.on_message(filters.command("usetting") & filters.chat(ALLOWED_GROUP_ID))
+async def usetting_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    has_thumb = "Yes 🖼️" if user_id in USER_THUMBNAILS and USER_THUMBNAILS[user_id] else "No ❌"
+    current_mode = USER_FILE_MODES.get(user_id, "video")
+    mode_text = "📹 Video Format" if current_mode == "video" else "📁 Document Format"
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Thumbnail Set: {has_thumb}", callback_data="set_thumb")],
+        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")],
+        [InlineKeyboardButton("🗑️ Remove Thumbnail", callback_data="remove_thumb")]
+    ])
+    
+    await message.reply_text(
+        "⚙️ **User Personal Settings**\n\n"
+        "Configure your personal thumbnail and upload format here:",
+        reply_markup=keyboard
+    )
+
+@app.on_callback_query()
+async def callback_handler(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
+    
+    if data == "set_thumb":
+        WAITING_FOR_THUMB.add(user_id)
+        await callback_query.message.edit_text(
+            "🖼️ Please send your thumbnail photo (Image) to this group.\n"
+            "The bot will automatically save it as your default thumbnail!"
+        )
+    elif data == "remove_thumb":
+        if user_id in USER_THUMBNAILS:
+            if USER_THUMBNAILS[user_id] and os.path.exists(USER_THUMBNAILS[user_id]):
+                try:
+                    os.remove(USER_THUMBNAILS[user_id])
+                except:
+                    pass
+            del USER_THUMBNAILS[user_id]
+        if user_id in WAITING_FOR_THUMB:
+            WAITING_FOR_THUMB.remove(user_id)
+            
+        await callback_query.message.edit_text("🗑️ Your thumbnail has been successfully removed!")
+    
+    elif data == "toggle_mode":
+        current_mode = USER_FILE_MODES.get(user_id, "video")
+        new_mode = "document" if current_mode == "video" else "video"
+        USER_FILE_MODES[user_id] = new_mode
+        mode_text = "📹 Video Format" if new_mode == "video" else "📁 Document Format"
+        
+        has_thumb = "Yes 🖼️" if user_id in USER_THUMBNAILS and USER_THUMBNAILS[user_id] else "No ❌"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Thumbnail Set: {has_thumb}", callback_data="set_thumb")],
+            [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")],
+            [InlineKeyboardButton("🗑️ Remove Thumbnail", callback_data="remove_thumb")]
+        ])
+        await callback_query.message.edit_reply_markup(reply_markup=keyboard)
+        await callback_query.answer(f"Changed upload mode to {new_mode}!")
+
+    elif data.startswith("cancel_dl_"):
+        task_user_id = int(data.split("_")[2])
+        if user_id == task_user_id or user_id == ADMIN_ID:
+            CANCEL_REQUESTS.add(task_user_id)
+            await callback_query.answer("⚠️ Task Cancel requested... Please wait.", show_alert=True)
+        else:
+            await callback_query.answer("❌ You are not authorized to cancel this task!", show_alert=True)
+
+    elif data.startswith("ytdl_"):
+        format_code = data.split("_")[1]
+        url = USER_YTDL_LINKS.get(user_id)
+        if not url:
+            await callback_query.message.edit_text("❌ Link expired or not found. Please send the `/ytdl` command again.")
+            return
+
+        if user_id != ADMIN_ID:
+            active_count = ACTIVE_TASKS.get(user_id, 0)
+            if active_count >= USER_TASK_LIMIT:
+                await callback_query.message.edit_text(
+                    f"⚠️ **Limit Exceeded!**\n\n"
+                    f"You already have `{active_count}` active downloads running. "
+                    f"Please wait for them to finish before starting a new one (Max allowed: {USER_TASK_LIMIT})."
+                )
+                return
+
+        await callback_query.message.edit_text("⏳ Initializing download with selected quality... Please wait.")
+        await process_download(client, callback_query.message, user_id, callback_query.from_user.first_name, url, None, None, format_code)
+
+@app.on_message(filters.photo & filters.chat(ALLOWED_GROUP_ID))
+async def save_thumbnail(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id in WAITING_FOR_THUMB:
+        os.makedirs("thumbnails", exist_ok=True)
+        photo_path = f"thumbnails/{user_id}.jpg"
+        await message.download(file_name=photo_path)
+        USER_THUMBNAILS[user_id] = photo_path
+        WAITING_FOR_THUMB.remove(user_id)
+        await message.reply_text("✅ Thumbnail saved successfully!")
+
+@app.on_message(filters.command("v") & filters.chat(ALLOWED_GROUP_ID))
+async def bypass_handler(client: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply_text("❌ Please provide a verification link!\nExample: `/v https://shortxlinks.in/xxxx`")
+        return
+
+    url = message.command[1]
+    msg = await message.reply_text("🔍 Checking link... Please wait.")
+
+    bypassed_link = url
+    try:
+        api_urls = [
+            f"https://api.bypass.vip/bypass?url={url}",
+            f"https://bypass.pmh.workers.dev/?url={url}"
+        ]
+        
+        async with aiohttp.ClientSession() as session:
+            for api_url in api_urls:
+                try:
+                    async with session.get(api_url, timeout=10) as resp:
+                        if resp.status == 200:
+                            res_data = await resp.json()
+                            dest = res_data.get("destination") or res_data.get("url")
+                            if dest and dest != url:
+                                bypassed_link = dest
+                                break
+                except:
+                    continue
+
+        result_text = (
+            f"<b>Nick Bypass Bot</b>\n\n"
+            f"<b>Original Link :</b> 🔗\n"
+            f"✅ <code>{url}</code>\n\n"
+            f"<b>Bypassed Link :</b> 🔓\n"
+            f"✅ <code>{bypassed_link}</code>"
+        )
+        await msg.edit_text(result_text)
+
+    except Exception as e:
+        await msg.edit_text(f"❌ Failed to bypass link!\n\n**Reason:** `{str(e)}`")
+
+@app.on_message(filters.command("leech") & filters.chat(ALLOWED_GROUP_ID))
+async def leech_handler(client: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply_text("❌ Please provide a link!\nExample: `/leech https://t.me/channel/123 -n NewName -t ThumbnailURL`")
+        return
+
+    raw_text = message.text.split(" ", 1)[1]
+    url = raw_text
+    custom_name = None
+    custom_thumb_source = None
+    
+    if "-t" in raw_text:
+        parts = raw_text.split("-t")
+        url = parts[0].strip()
+        custom_thumb_source = parts[1].strip().split(" ")[0]
+        if "-n" in parts[0]:
+            sub_parts = parts[0].split("-n")
+            url = sub_parts[0].strip()
+            custom_name = sub_parts[1].strip()
+    elif "-n" in raw_text:
+        parts = raw_text.split("-n")
+        url = parts[0].strip()
+        custom_name = parts[1].strip().split(" -t")[0]
+        if "-t" in parts[1]:
+            custom_thumb_source = parts[1].split("-t")[1].strip()
+
+    user = message.from_user
+    user_name = user.first_name if user else "Unknown"
+    user_id = user.id if user else 0
+
+    if user_id != ADMIN_ID:
+        active_count = ACTIVE_TASKS.get(user_id, 0)
+        if active_count >= USER_TASK_LIMIT:
+            await message.reply_text(
+                f"⚠️ **Limit Exceeded!**\n\n"
+                f"You already have `{active_count}` active downloads running. "
+                f"Please wait for them to finish before starting a new one (Max allowed: {USER_TASK_LIMIT})."
+            )
+            return
+
+    status_msg = await message.reply_text("⏳ Initializing download... Please wait.")
+    
+    if "t.me/" in url and not "http" in url.split("t.me/")[1] and len(url.split("t.me/")[1].split("/")) >= 2:
+        await process_telegram_link(client, status_msg, user_id, user_name, url, custom_name, custom_thumb_source)
+    else:
+        await process_download(client, status_msg, user_id, user_name, url, custom_name, custom_thumb_source, 'best')
+
+@app.on_message((filters.command("ytdl") | filters.command("yt")) & filters.chat(ALLOWED_GROUP_ID))
+async def ytdl_handler(client: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply_text("❌ Please provide a YouTube link!\nExample: `/ytdl https://youtu.be/xxxx`")
+        return
+
+    url = message.command[1]
+    user_id = message.from_user.id
+    USER_YTDL_LINKS[user_id] = url
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 144p", callback_data="ytdl_144")],
+        [InlineKeyboardButton("📥 240p", callback_data="ytdl_240")],
+        [InlineKeyboardButton("📥 360p", callback_data="ytdl_360")],
+        [InlineKeyboardButton("📥 480p", callback_data="ytdl_480")],
+        [InlineKeyboardButton("📥 720p", callback_data="ytdl_720")],
+        [InlineKeyboardButton("📥 1080p", callback_data="ytdl_1080")],
+        [InlineKeyboardButton("🎵 MP3 Audio", callback_data="ytdl_mp3")]
+    ])
+
+    await message.reply_text(
+        "👇 **Select video formatni tanlang:**",
+        reply_markup=keyboard
+    )
+
 async def process_telegram_link(client, status_msg, user_id, user_name, url, custom_name, custom_thumb_source):
     ACTIVE_TASKS[user_id] = ACTIVE_TASKS.get(user_id, 0) + 1
     downloaded_file = None
@@ -7,16 +369,13 @@ async def process_telegram_link(client, status_msg, user_id, user_name, url, cus
     try:
         await status_msg.edit_text("🔍 Fetching message from Telegram channel...")
         
-        # ലിങ്ക് പാസ്സ് ചെയ്ത് ചാനൽ ഐഡിയും മെസ്സേജ് ഐഡിയും കൃത്യമായി എടുക്കാൻ
         parsed_url = url.strip("/").split("/")
         msg_id = int(parsed_url[-1])
         
         if "c" in parsed_url:
-            # ഇത് പ്രൈവറ്റ് ചാനൽ ലിങ്ക് ആണ് (ഉദാഹരണത്തിന്: t.me/c/123456789/123)
             c_index = parsed_url.index("c")
             chat_id = int("-100" + parsed_url[c_index + 1])
         else:
-            # ഇത് പബ്ലിക് ചാനൽ ലിങ്ക് ആണ് (ഉദാഹരണത്തിന്: t.me/channelname/123)
             channel_username = parsed_url[-2]
             if channel_username.isdigit() or channel_username.startswith("-100"):
                 chat_id = int(channel_username)
@@ -31,7 +390,6 @@ async def process_telegram_link(client, status_msg, user_id, user_name, url, cus
         await status_msg.edit_text("📥 Downloading media from Telegram...")
         os.makedirs("downloads", exist_ok=True)
 
-        # ഫയൽ കൃത്യമായി മുഴുവനായി ഡൗൺലോഡ് ആക്കാൻ പ്രോഗ്രസ് ഹാൻഡ്ലർ
         last_dl_update = 0
         async def dl_progress(current, total):
             nonlocal last_dl_update
@@ -225,4 +583,9 @@ async def process_telegram_link(client, status_msg, user_id, user_name, url, cus
             ACTIVE_TASKS[user_id] -= 1
             if ACTIVE_TASKS[user_id] <= 0:
                 del ACTIVE_TASKS[user_id]
-                
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.create_task(start_web_server())
+    logging.info("Bot Starting...")
+    app.run()
