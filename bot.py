@@ -107,6 +107,35 @@ async def check_force_sub(client, user_id):
     except Exception:
         return True 
 
+def get_video_duration_and_resolution(file_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "format=duration:stream=width,height",
+            "-of", "json", file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        data = json.loads(result.stdout)
+        duration = int(float(data.get("format", {}).get("duration", 0)))
+        width = int(data.get("streams", [{}])[0].get("width", 0))
+        height = int(data.get("streams", [{}])[0].get("height", 0))
+        return duration, width, height
+    except Exception:
+        return 0, 480, 320
+
+def generate_thumbnail(file_path, output_thumb="auto_thumb.jpg"):
+    try:
+        cmd = [
+            "ffmpeg", "-ss", "00:00:03", "-i", file_path,
+            "-vframes", "1", "-q:v", "2", output_thumb, "-y"
+        ]
+        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(output_thumb):
+            return output_thumb
+    except Exception:
+        pass
+    return None
+
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -123,6 +152,66 @@ async def start_handler(client: Client, message: Message):
         [InlineKeyboardButton("📢 Leech Group Join Now", url=FORCE_SUB_LINK)]
     ])
     await message.reply_text("🤖 **I am Leech Bot!** Ready to help you download and manage files.", reply_markup=keyboard)
+
+@app.on_message(filters.command(["plans", "plan"]) & filters.private)
+async def plans_private_handler(client: Client, message: Message):
+    plans_text = (
+        "<b>- AVAILABLE PLANS ❤️ -</b>\n\n"
+        "• <b>08rs</b> - 1 Day\n"
+        "• <b>15rs</b> - 3 Days\n"
+        "• <b>30rs</b> - 1 Week\n"
+        "• <b>70rs</b> - 1 Month\n\n"
+        "✨ <b>UPI ID -</b> <code>vijayalakshmik8825@ybl</code>\n\n"
+        "💢 <b>MUST SEND SCREENSHOT AFTER PAYMENT</b>"
+    )
+    await message.reply_text(plans_text)
+
+@app.on_message(filters.command("addpremium") & filters.private)
+async def addpremium_handler(client: Client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("❌ You are not authorized to use this command!")
+        return
+    args = message.text.split()
+    if len(args) < 3:
+        await message.reply_text("❌ Use format: `/addpremium user_id days`")
+        return
+    try:
+        target_user = args[1]
+        days = int(args[2])
+        expiry = time.time() + (days * 86400)
+        PREMIUM_USERS[target_user] = expiry
+        save_data()
+        await message.reply_text(f"✅ Successfully added premium for user `{target_user}` for {days} days!")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {str(e)}")
+
+@app.on_message(filters.command("removepremium") & filters.private)
+async def removepremium_handler(client: Client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("❌ You are not authorized to use this command!")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("❌ Use format: `/removepremium user_id`")
+        return
+    target_user = args[1]
+    if target_user in PREMIUM_USERS:
+        del PREMIUM_USERS[target_user]
+        save_data()
+        await message.reply_text(f"✅ Successfully removed premium for user `{target_user}`!")
+    else:
+        await message.reply_text("❌ User is not in the premium list or invalid ID.")
+
+@app.on_message(filters.command("createcode") & filters.private)
+async def createcode_handler(client: Client, message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text("❌ You are not authorized to use this command!")
+        return
+    await message.reply_text("✅ Use: `/createcode days` to create a redeem code.")
+
+@app.on_message(filters.command("redeem") & filters.private)
+async def redeem_handler(client: Client, message: Message):
+    await message.reply_text("❌ Invalid or expired redeem code!")
 
 @app.on_message((filters.command("usetting") | filters.command("usettings")) & filters.group)
 async def usetting_group_handler(client: Client, message: Message):
@@ -144,7 +233,7 @@ async def usetting_group_handler(client: Client, message: Message):
     ])
     
     await message.reply_text(
-        "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:",
+        "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:\n\n*Note: To set a thumbnail, send a photo with caption `/setthumb` in this group or chat!*",
         reply_markup=keyboard
     )
 
@@ -165,7 +254,7 @@ async def usetting_callback(client: Client, callback_query: CallbackQuery):
         save_data()
         await callback_query.answer("Thumbnail Removed Successfully!")
     elif data == "set_thumb_info":
-        await callback_query.answer("Please send a photo in bot's private chat to set it as your custom thumbnail!", show_alert=True)
+        await callback_query.answer("Send a photo with caption /setthumb to set your custom thumbnail!", show_alert=True)
         return
     
     has_thumb = "Yes ✅" if USER_SETTINGS[user_id].get("thumb") else "No ❌"
@@ -179,14 +268,19 @@ async def usetting_callback(client: Client, callback_query: CallbackQuery):
     
     try:
         await callback_query.message.edit_text(
-            "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:",
+            "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:\n\n*Note: To set a thumbnail, send a photo with caption `/setthumb` in this group or chat!*",
             reply_markup=keyboard
         )
     except Exception:
         pass
 
-@app.on_message(filters.photo & filters.private)
+@app.on_message(filters.photo & (filters.private | filters.group))
 async def photo_handler(client: Client, message: Message):
+    if message.chat.type != "private" and message.chat.id != ALLOWED_GROUP_ID:
+        return
+    if message.chat.type != "private" and message.caption and message.caption.strip() != "/setthumb":
+        return
+
     user_id = str(message.from_user.id)
     if user_id not in USER_SETTINGS:
         USER_SETTINGS[user_id] = {"mode": "video", "thumb": None}
@@ -195,7 +289,7 @@ async def photo_handler(client: Client, message: Message):
     file_path = await client.download_media(file_id, file_name=f"thumb_{user_id}.jpg")
     USER_SETTINGS[user_id]["thumb"] = file_path
     save_data()
-    await message.reply_text("✅ Custom thumbnail saved successfully! Now you can use it in groups.")
+    await message.reply_text("✅ Custom thumbnail saved successfully! Now it will be used for your leech tasks.")
 
 @app.on_message((filters.command("leech") | filters.command("v")) & filters.group)
 async def restricted_group_handler(client: Client, message: Message):
@@ -253,17 +347,6 @@ async def restricted_group_handler(client: Client, message: Message):
                             return
 
             if file_path and os.path.exists(file_path):
-                # Fix metadata & duration issue (0:00 bug fix) using ffmpeg
-                fixed_path = "fixed_" + file_path
-                try:
-                    cmd_ffmpeg = f"ffmpeg -i {file_path} -c copy {fixed_path} -y"
-                    subprocess.run(cmd_ffmpeg, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    if os.path.exists(fixed_path):
-                        os.remove(file_path)
-                        file_path = fixed_path
-                except Exception:
-                    pass
-
                 if custom_name:
                     dir_name = os.path.dirname(file_path)
                     ext = os.path.splitext(file_path)[1]
@@ -273,9 +356,12 @@ async def restricted_group_handler(client: Client, message: Message):
 
                 await msg.edit_text("📤 Uploading to Telegram...")
                 
+                file_size_bytes = os.path.getsize(file_path)
+                file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
+
                 user_info = (
                     f"\n\n👤 **Task By:** {message.from_user.first_name} (`{message.from_user.id}`)\n"
-                    f"📦 **Size:** 92.41 MB\n"
+                    f"📦 **Size:** {file_size_mb} MB\n"
                     f"🔗 **Link:** {url}"
                 )
 
@@ -294,6 +380,14 @@ async def restricted_group_handler(client: Client, message: Message):
                     except Exception:
                         pass
 
+                auto_thumb_file = None
+                if not u_thumb and u_mode == "video":
+                    auto_thumb_file = generate_thumbnail(file_path)
+                    if auto_thumb_file:
+                        u_thumb = auto_thumb_file
+
+                duration, width, height = get_video_duration_and_resolution(file_path)
+
                 if u_mode == "document":
                     await client.send_document(
                         chat_id=message.chat.id, 
@@ -305,12 +399,15 @@ async def restricted_group_handler(client: Client, message: Message):
                     await client.send_video(
                         chat_id=message.chat.id, 
                         video=file_path, 
+                        duration=duration,
+                        width=width,
+                        height=height,
                         thumb=u_thumb,
                         caption=f"🎬 **Video Uploaded Successfully!**{user_info}"
                     )
                 
                 os.remove(file_path)
-                if u_thumb and os.path.exists(str(u_thumb)) and "custom_thumb.jpg" in str(u_thumb):
+                if u_thumb and os.path.exists(str(u_thumb)) and ("custom_thumb.jpg" in str(u_thumb) or "auto_thumb.jpg" in str(u_thumb)):
                     os.remove(u_thumb)
                 await msg.delete()
             else:
@@ -318,7 +415,11 @@ async def restricted_group_handler(client: Client, message: Message):
         except Exception as e:
             await msg.edit_text(f"❌ Error: {str(e)}")
 
+async def main():
+    await start_web_server()
+    await app.start()
+    print("Bot Started Successfully! 🚀")
+    await asyncio.gather(*(asyncio.Event().wait() for _ in range(1)))
+
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_web_server())
-    app.run()
+    asyncio.run(main())
