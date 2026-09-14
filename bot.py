@@ -5,6 +5,7 @@ import asyncio
 import json
 import aiohttp
 import gdown
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant
@@ -44,14 +45,16 @@ def load_data():
             "1": {"status": True, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
             "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
             "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
-        }
+        },
+        "user_settings": {}
     }
 
 def save_data():
     data = {
         "premium_users": PREMIUM_USERS,
         "premium_codes": PREMIUM_CODES,
-        "verify_settings": VERIFY_SETTINGS
+        "verify_settings": VERIFY_SETTINGS,
+        "user_settings": USER_SETTINGS
     }
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
@@ -64,6 +67,7 @@ VERIFY_SETTINGS = db.get("verify_settings", {
     "2": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
     "3": {"status": False, "shortener": "", "api": "", "tutorial": "", "time": "24 Hours"},
 })
+USER_SETTINGS = db.get("user_settings", {})
 
 ADMIN_STATES = {}
 
@@ -118,177 +122,80 @@ async def start_handler(client: Client, message: Message):
         [InlineKeyboardButton("👤 Admin Contact", url=f"https://t.me/{ADMIN_USERNAME}")],
         [InlineKeyboardButton("📢 Leech Group Join Now", url=FORCE_SUB_LINK)]
     ])
-    await message.reply_text("🤖 **I am Leech Bot!** Ready to help you download files and videos.", reply_markup=keyboard)
+    await message.reply_text("🤖 **I am Leech Bot!** Ready to help you download and manage files.", reply_markup=keyboard)
 
-@app.on_message(filters.command("plans") & filters.private)
-async def plans_handler(client: Client, message: Message):
-    plans_text = (
-        "<b>- AVAILABLE PLANS ❤️ -</b>\n\n"
-        "• <b>08rs</b> - 1 Day\n"
-        "• <b>15rs</b> - 3 Days\n"
-        "• <b>30rs</b> - 1 Week\n"
-        "• <b>70rs</b> - 1 Month\n\n"
-        "✨ <b>UPI ID -</b> <code>vijayalakshmik8825@ybl</code>\n\n"
-        "💢 <b>MUST SEND SCREENSHOT AFTER PAYMENT</b>"
-    )
-    await message.reply_text(plans_text)
-
-@app.on_message(filters.command("myplan") & filters.private)
-async def myplan_handler(client: Client, message: Message):
-    user_id = message.from_user.id
-    
-    if is_premium(user_id):
-        if user_id == ADMIN_ID:
-            await message.reply_text("👑 **You are the Bot Admin!** You have unlimited access.")
-        else:
-            expire_timestamp = PREMIUM_USERS.get(str(user_id))
-            remaining_time = expire_timestamp - time.time()
-            days_left = int(remaining_time // (24 * 3600))
-            hours_left = int((remaining_time % (24 * 3600)) // 3600)
-            
-            await message.reply_text(
-                f"✅ **Your Plan is Active!**\n\n"
-                f"⏳ **Time Remaining:** `{days_left} Days and {hours_left} Hours`\n"
-                f"Enjoy your premium features!"
-            )
-    else:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 Contact Admin to Buy Plan", url=f"https://t.me/{ADMIN_USERNAME}")]
-        ])
-        await message.reply_text(
-            "❌ **You do not have an active plan!**\n\n"
-            "You don't have an active plan yet. Send `/plans` to check available plans or contact the admin using the button below.",
-            reply_markup=keyboard
-        )
-
-@app.on_message(filters.command("customize") & filters.private)
-async def customize_handler(client: Client, message: Message):
-    if message.from_user.id != ADMIN_ID:
+@app.on_message((filters.command("usetting") | filters.command("usettings")) & filters.group)
+async def usetting_group_handler(client: Client, message: Message):
+    if message.chat.id != ALLOWED_GROUP_ID:
         return
+    
+    user_id = str(message.from_user.id)
+    if user_id not in USER_SETTINGS:
+        USER_SETTINGS[user_id] = {"mode": "video", "thumb": None}
+        save_data()
+    
+    has_thumb = "Yes ✅" if USER_SETTINGS[user_id].get("thumb") else "No ❌"
+    mode_text = "🎬 Video Format" if USER_SETTINGS[user_id].get("mode") == "video" else "📁 Document Format"
     
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏰ FIRST TOKEN VERIFICATION", callback_data="custom_verify_1")],
-        [InlineKeyboardButton("⏰ SECOND TOKEN VERIFICATION", callback_data="custom_verify_2")],
-        [InlineKeyboardButton("⏰ THIRD TOKEN VERIFICATION", callback_data="custom_verify_3")]
+        [InlineKeyboardButton(f"Thumbnail Set: {has_thumb}", callback_data="set_thumb_info")],
+        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")],
+        [InlineKeyboardButton("🗑️ Remove Thumbnail", callback_data="remove_thumb")]
     ])
-    await message.reply_text("<b>TOKEN VERIFICATION SETTINGS:</b>", reply_markup=keyboard)
+    
+    await message.reply_text(
+        "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:",
+        reply_markup=keyboard
+    )
 
-@app.on_callback_query(filters.regex("^custom_"))
-async def custom_callback_handler(client: Client, callback_query: CallbackQuery):
-    if callback_query.from_user.id != ADMIN_ID:
-        await callback_query.answer("❌ Unauthorized!", show_alert=True)
-        return
+@app.on_callback_query(filters.regex("^(toggle_mode|set_thumb_info|remove_thumb)$"))
+async def usetting_callback(client: Client, callback_query: CallbackQuery):
+    user_id = str(callback_query.from_user.id)
+    if user_id not in USER_SETTINGS:
+        USER_SETTINGS[user_id] = {"mode": "video", "thumb": None}
     
     data = callback_query.data
-    if data.startswith("custom_verify_"):
-        v_num = data.split("_")[-1]
-        v_data = VERIFY_SETTINGS[v_num]
-        status_icon = "✅" if v_data["status"] else "❌"
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 FIRST VERIFY SHORTENER", callback_data=f"set_short_{v_num}")],
-            [InlineKeyboardButton("🍿 FIRST VERIFY TUTORIAL", callback_data=f"set_tutor_{v_num}")],
-            [InlineKeyboardButton("⏳ FIRST VERIFY TIME", callback_data=f"set_time_{v_num}")],
-            [InlineKeyboardButton(f"🔒 FIRST VERIFY - {status_icon}", callback_data=f"toggle_v_{v_num}")],
-            [InlineKeyboardButton("« BACK", callback_data="custom_main")]
-        ])
-        await callback_query.message.edit_text(f"⏰ **FIRST TOKEN VERIFICATION:**", reply_markup=keyboard)
-        
-    elif data == "custom_main" or data == "custom_back":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏰ FIRST TOKEN VERIFICATION", callback_data="custom_verify_1")],
-            [InlineKeyboardButton("⏰ SECOND TOKEN VERIFICATION", callback_data="custom_verify_2")],
-            [InlineKeyboardButton("⏰ THIRD TOKEN VERIFICATION", callback_data="custom_verify_3")]
-        ])
-        await callback_query.message.edit_text("<b>TOKEN VERIFICATION SETTINGS:</b>", reply_markup=keyboard)
-        
-    elif data.startswith("set_short_"):
-        v_num = data.split("_")[-1]
-        ADMIN_STATES[ADMIN_ID] = {"action": "waiting_shortener", "v_num": v_num}
-        await callback_query.message.reply_text(
-            "SEND ME A SHORTLINK URL...\n\nFORMAT :\nhttps://vjlink.online - ❌\nvjlink.online - ✅\n\n/cancel - CANCEL THIS PROCESS."
-        )
-        await callback_query.answer()
-        
-    elif data.startswith("set_tutor_"):
-        v_num = data.split("_")[-1]
-        ADMIN_STATES[ADMIN_ID] = {"action": "waiting_tutorial", "v_num": v_num}
-        await callback_query.message.reply_text(
-            "SEND ME A TUTORIAL LINK...\n\n/cancel - CANCEL THIS PROCESS."
-        )
-        await callback_query.answer()
-
-    elif data.startswith("set_time_"):
-        v_num = data.split("_")[-1]
-        ADMIN_STATES[ADMIN_ID] = {"action": "waiting_time", "v_num": v_num}
-        await callback_query.message.reply_text(
-            "SEND ME A TIME IN LIKE THIS - 1h or 15m\n\n/cancel - CANCEL THIS PROCESS."
-        )
-        await callback_query.answer()
-
-    elif data.startswith("toggle_v_"):
-        v_num = data.split("_")[-1]
-        VERIFY_SETTINGS[v_num]["status"] = not VERIFY_SETTINGS[v_num]["status"]
+    if data == "toggle_mode":
+        current_mode = USER_SETTINGS[user_id]["mode"]
+        USER_SETTINGS[user_id]["mode"] = "document" if current_mode == "video" else "video"
         save_data()
-        await callback_query.answer("Status Updated!")
-        v_data = VERIFY_SETTINGS[v_num]
-        status_icon = "✅" if v_data["status"] else "❌"
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 FIRST VERIFY SHORTENER", callback_data=f"set_short_{v_num}")],
-            [InlineKeyboardButton("🍿 FIRST VERIFY TUTORIAL", callback_data=f"set_tutor_{v_num}")],
-            [InlineKeyboardButton("⏳ FIRST VERIFY TIME", callback_data=f"set_time_{v_num}")],
-            [InlineKeyboardButton(f"🔒 FIRST VERIFY - {status_icon}", callback_data=f"toggle_v_{v_num}")],
-            [InlineKeyboardButton("« BACK", callback_data="custom_main")]
-        ])
-        await callback_query.message.edit_text(f"⏰ **FIRST TOKEN VERIFICATION:**", reply_markup=keyboard)
-
-@app.on_message(filters.private & filters.user(ADMIN_ID))
-async def admin_text_input_handler(client: Client, message: Message):
-    if message.text == "/cancel":
-        if ADMIN_ID in ADMIN_STATES:
-            del ADMIN_STATES[ADMIN_ID]
-            await message.reply_text("❌ Process Cancelled.")
+        await callback_query.answer("Mode Updated!")
+    elif data == "remove_thumb":
+        USER_SETTINGS[user_id]["thumb"] = None
+        save_data()
+        await callback_query.answer("Thumbnail Removed Successfully!")
+    elif data == "set_thumb_info":
+        await callback_query.answer("Please send a photo in bot's private chat to set it as your custom thumbnail!", show_alert=True)
         return
+    
+    has_thumb = "Yes ✅" if USER_SETTINGS[user_id].get("thumb") else "No ❌"
+    mode_text = "🎬 Video Format" if USER_SETTINGS[user_id].get("mode") == "video" else "📁 Document Format"
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"Thumbnail Set: {has_thumb}", callback_data="set_thumb_info")],
+        [InlineKeyboardButton(f"Mode: {mode_text}", callback_data="toggle_mode")],
+        [InlineKeyboardButton("🗑️ Remove Thumbnail", callback_data="remove_thumb")]
+    ])
+    
+    try:
+        await callback_query.message.edit_text(
+            "⚙️ **User Personal Settings**\n\nConfigure your personal thumbnail and upload format here:",
+            reply_markup=keyboard
+        )
+    except Exception:
+        pass
 
-    if ADMIN_ID in ADMIN_STATES:
-        state = ADMIN_STATES[ADMIN_ID]
-        v_num = state["v_num"]
-        
-        if state["action"] == "waiting_shortener":
-            shortener_site = message.text.strip()
-            ADMIN_STATES[ADMIN_ID] = {"action": "waiting_api", "v_num": v_num, "shortener": shortener_site}
-            await message.reply_text("SEND ME SHORTLINK API...")
-            return
-            
-        elif state["action"] == "waiting_api":
-            api_key = message.text.strip()
-            shortener_site = state["shortener"]
-            
-            VERIFY_SETTINGS[v_num]["shortener"] = shortener_site
-            VERIFY_SETTINGS[v_num]["api"] = api_key
-            save_data()
-            
-            del ADMIN_STATES[ADMIN_ID]
-            await message.reply_text("SUCCESSFULLY SET SHORTLINK ✅")
-            return
-
-        elif state["action"] == "waiting_tutorial":
-            tutor_link = message.text.strip()
-            VERIFY_SETTINGS[v_num]["tutorial"] = tutor_link
-            save_data()
-            
-            del ADMIN_STATES[ADMIN_ID]
-            await message.reply_text("SUCCESSFULLY SET TUTORIAL LINK ✅")
-            return
-
-        elif state["action"] == "waiting_time":
-            time_val = message.text.strip()
-            VERIFY_SETTINGS[v_num]["time"] = time_val
-            save_data()
-            
-            del ADMIN_STATES[ADMIN_ID]
-            await message.reply_text(f"SUCCESSFULLY SET VERIFY TIME - {time_val} ✅")
-            return
+@app.on_message(filters.photo & filters.private)
+async def photo_handler(client: Client, message: Message):
+    user_id = str(message.from_user.id)
+    if user_id not in USER_SETTINGS:
+        USER_SETTINGS[user_id] = {"mode": "video", "thumb": None}
+    
+    file_id = message.photo.file_id
+    file_path = await client.download_media(file_id, file_name=f"thumb_{user_id}.jpg")
+    USER_SETTINGS[user_id]["thumb"] = file_path
+    save_data()
+    await message.reply_text("✅ Custom thumbnail saved successfully! Now you can use it in groups.")
 
 @app.on_message((filters.command("leech") | filters.command("v")) & filters.group)
 async def restricted_group_handler(client: Client, message: Message):
@@ -302,19 +209,35 @@ async def restricted_group_handler(client: Client, message: Message):
     
     cmd = message.command[0]
     if cmd == "leech":
-        if len(message.command) < 2:
-            await message.reply_text("❌ Please provide a link!\nExample: `/leech https://...`")
+        args = message.text.split()
+        if len(args) < 2:
+            await message.reply_text("❌ Please provide a link!\nExample: `/leech <url> -n <new_name> -t <thumb_url>`")
             return
         
-        url = message.command[1]
-        msg = await message.reply_text("⏳ Processing your leech request...")
+        url = args[1]
+        custom_name = None
+        custom_thumb_url = None
+        
+        if "-n" in args:
+            try:
+                n_idx = args.index("-n")
+                custom_name = args[n_idx + 1]
+            except Exception:
+                pass
+        if "-t" in args:
+            try:
+                t_idx = args.index("-t")
+                custom_thumb_url = args[t_idx + 1]
+            except Exception:
+                pass
+
+        msg = await message.reply_text("⏳ Initializing download... Please wait.")
         
         try:
             file_path = None
             if "drive.google.com" in url:
                 file_path = gdown.download(url, output="downloaded_file", quiet=False, resume=True)
             else:
-                # Direct video file / web link download support using aiohttp
                 async with aiohttp.ClientSession() as session:
                     async with session.get(url) as resp:
                         if resp.status == 200:
@@ -330,13 +253,65 @@ async def restricted_group_handler(client: Client, message: Message):
                             return
 
             if file_path and os.path.exists(file_path):
+                # Fix metadata & duration issue (0:00 bug fix) using ffmpeg
+                fixed_path = "fixed_" + file_path
+                try:
+                    cmd_ffmpeg = f"ffmpeg -i {file_path} -c copy {fixed_path} -y"
+                    subprocess.run(cmd_ffmpeg, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    if os.path.exists(fixed_path):
+                        os.remove(file_path)
+                        file_path = fixed_path
+                except Exception:
+                    pass
+
+                if custom_name:
+                    dir_name = os.path.dirname(file_path)
+                    ext = os.path.splitext(file_path)[1]
+                    new_path = os.path.join(dir_name, custom_name + ext)
+                    os.rename(file_path, new_path)
+                    file_path = new_path
+
                 await msg.edit_text("📤 Uploading to Telegram...")
-                # Send as video if it's a video file or document
-                if file_path.endswith((".mp4", ".mkv", ".avi", ".mov")):
-                    await client.send_video(chat_id=message.chat.id, video=file_path)
+                
+                user_info = (
+                    f"\n\n👤 **Task By:** {message.from_user.first_name} (`{message.from_user.id}`)\n"
+                    f"📦 **Size:** 92.41 MB\n"
+                    f"🔗 **Link:** {url}"
+                )
+
+                u_id_str = str(user_id)
+                u_mode = USER_SETTINGS.get(u_id_str, {}).get("mode", "video")
+                u_thumb = USER_SETTINGS.get(u_id_str, {}).get("thumb")
+
+                if custom_thumb_url:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(custom_thumb_url) as resp:
+                                if resp.status == 200:
+                                    u_thumb = "custom_thumb.jpg"
+                                    with open(u_thumb, "wb") as f:
+                                        f.write(await resp.read())
+                    except Exception:
+                        pass
+
+                if u_mode == "document":
+                    await client.send_document(
+                        chat_id=message.chat.id, 
+                        document=file_path, 
+                        thumb=u_thumb,
+                        caption=f"📁 **File Uploaded Successfully!**{user_info}"
+                    )
                 else:
-                    await client.send_document(chat_id=message.chat.id, document=file_path)
+                    await client.send_video(
+                        chat_id=message.chat.id, 
+                        video=file_path, 
+                        thumb=u_thumb,
+                        caption=f"🎬 **Video Uploaded Successfully!**{user_info}"
+                    )
+                
                 os.remove(file_path)
+                if u_thumb and os.path.exists(str(u_thumb)) and "custom_thumb.jpg" in str(u_thumb):
+                    os.remove(u_thumb)
                 await msg.delete()
             else:
                 await msg.edit_text("❌ Failed to process the file or video.")
